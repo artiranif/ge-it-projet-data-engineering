@@ -24,9 +24,15 @@ x-airflow-common: &airflow-common
     AIRFLOW__ELASTICSEARCH__HOST: 'http://airflow-elasticsearch:9200'
     AIRFLOW__ELASTICSEARCH__USER: 'elastic'
     AIRFLOW__ELASTICSEARCH__PASSWORD: '${ELASTIC_PASSWORD}'
-    _PIP_ADDITIONAL_REQUIREMENTS: 'apache-airflow-providers-elasticsearch'
+    _PIP_ADDITIONAL_REQUIREMENTS: 'apache-airflow-providers-elasticsearch,requests'
+    # Rend les modules du projet importables dans les conteneurs (scripts.*, dags.*)
+    PYTHONPATH: '/opt/airflow'
+    # Dossier de sortie du JSON brut utilise par scripts/extract.py
+    DATA_DIR: '/opt/airflow/data/raw'
   volumes:
     - ./dags:/opt/airflow/dags
+    - ./scripts:/opt/airflow/scripts
+    - ./data:/opt/airflow/data
     - ./logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
     - ./config:/opt/airflow/config
