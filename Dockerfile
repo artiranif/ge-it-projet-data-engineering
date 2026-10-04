@@ -10,11 +10,11 @@
 
 FROM apache/airflow:3.3.2
 
-# Install project dependencies. Pinning apache-airflow to the image version and
-# using the constraints shipped in the image avoids a surprise downgrade/upgrade
-# of Airflow or of its own dependencies.
+# Install project dependencies ONLY. We do NOT reinstall apache-airflow: it is
+# already provided by the base image, and reinstalling it can leave a broken
+# environment (e.g. "No module named 'airflow'"). Constraints keep versions
+# aligned with the ones Airflow was tested with.
 COPY requirements.txt /requirements.txt
 RUN pip install --no-cache-dir \
-    "apache-airflow==${AIRFLOW_VERSION}" \
     -r /requirements.txt \
     --constraint "${HOME}/constraints.txt"

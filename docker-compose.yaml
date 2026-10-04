@@ -37,7 +37,9 @@ x-airflow-common: &airflow-common
     - ./dags:/opt/airflow/dags
     - ./scripts:/opt/airflow/scripts
     - ./data:/opt/airflow/data
-    - ./logs:/opt/airflow/logs
+    # Named volume (not a bind mount): avoids UID/permission mismatches between
+    # the host and the container user. Logs are still shipped to Elasticsearch.
+    - airflow-logs:/opt/airflow/logs
     - ./plugins:/opt/airflow/plugins
     - ./config:/opt/airflow/config
   user: "${AIRFLOW_UID:-50000}:0"
@@ -274,5 +276,6 @@ networks:
     driver: bridge
 
 volumes:
+  airflow-logs:
   airflow-elasticsearch_data:
   airflow-postgres_data:

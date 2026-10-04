@@ -79,8 +79,12 @@ Get-Content (Get-ChildItem data\raw\*.json | Select-Object -First 1).FullName -T
 
 ## 5. Run inside Docker / Airflow
 
-A `.env` file with `ELASTIC_PASSWORD`, `KIBANA_PASSWORD` and `KIBANA_ENCRYPTION_KEY`
-is required before starting the stack.
+A `.env` file (copy of the versioned `.env.mock`) is required before starting the stack.
+It must define `AIRFLOW_UID`, `ELASTIC_PASSWORD`, `KIBANA_PASSWORD` and `KIBANA_ENCRYPTION_KEY`.
+
+> **`AIRFLOW_UID` must stay `50000`** (the user baked into the official image). Using your
+> host uid requires the Airflow **entrypoint** to run on every service (to create the user and
+> set `HOME=/home/airflow`); bypassing it causes `ModuleNotFoundError: No module named 'airflow'`.
 
 The stack runs a **custom Airflow image** (`Dockerfile`, based on `apache/airflow:3.3.2`)
 that installs `requirements.txt` **once, at build time** (`pip install -r requirements.txt`).
@@ -115,9 +119,12 @@ docker compose down
 | `./dags` | `/opt/airflow/dags` |
 | `./scripts` | `/opt/airflow/scripts` |
 | `./data` | `/opt/airflow/data` |
-| `./logs` | `/opt/airflow/logs` |
+| `airflow-logs` (named volume) | `/opt/airflow/logs` |
 | `./plugins` | `/opt/airflow/plugins` |
 | `./config` | `/opt/airflow/config` |
+
+> `logs/` is a **named volume**, not a bind mount: this avoids UID/permission clashes
+> between the host and the container user. Logs are still shipped to Elasticsearch.
 
 > `PYTHONPATH=/opt/airflow` and `DATA_DIR=/opt/airflow/data/raw`, so `from scripts.extract import extract_data` works in the DAGs.
 
@@ -133,6 +140,8 @@ docker compose exec airflow-scheduler python /opt/airflow/scripts/extract.py
 
 | Problem | Likely cause | Fix |
 |---|---|---|
+| `ModuleNotFoundError: No module named 'airflow'` | `AIRFLOW_UID` changed away from 50000 while a service bypasses the Airflow entrypoint (`entrypoint: /bin/bash`) → user/HOME not created | set `AIRFLOW_UID=50000` in `.env`, then `docker compose down && docker compose up -d` (see §5) |
+| `Permission denied: '/opt/airflow/logs/...'` | `./logs` bind-mounted and not writable by the container user | use the named volume `airflow-logs` (already configured) or `chown` the folder |
 | `ModuleNotFoundError: No module named 'requests'` | dependency not installed / wrong interpreter | re-run the install command (§1) with `.venv\Scripts\python.exe` |
 | `UnicodeEncodeError: 'charmap' codec...` | cp1252 console on the `✅` | `$env:PYTHONIOENCODING = "utf-8"` (§3) |
 | `RuntimeError: Extraction failed...` | fewer than 50 % of Pokémon fetched (network) | check the Internet connection and re-run |
