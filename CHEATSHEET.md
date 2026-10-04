@@ -136,7 +136,48 @@ docker compose exec airflow-scheduler python /opt/airflow/scripts/extract.py
 
 ---
 
-## 6. Quick troubleshooting
+## 6. Security
+
+**No secret is stored in `docker-compose.yaml` (public repo).** All of them come from `.env`
+(git-ignored): `AIRFLOW_UID`, `AIRFLOW_ADMIN_PASSWORD`, `POSTGRES_PASSWORD`,
+`ELASTIC_PASSWORD`, `KIBANA_PASSWORD`, `KIBANA_ENCRYPTION_KEY` (see `.env.mock`).
+
+### Change the Airflow admin password
+
+```powershell
+# interactive (password not kept in the shell history)
+docker compose exec airflow-apiserver airflow users reset-password --username admin
+
+# or non-interactive
+docker compose exec airflow-apiserver airflow users reset-password --username admin --password "NewStrongPassword!"
+
+# list users
+docker compose exec airflow-apiserver airflow users list
+```
+
+> Use a running service (`airflow-apiserver`, `airflow-scheduler`, `airflow-worker`).
+> NOT `airflow-cli`: it is behind the `debug` profile and is not started by default.
+
+### Change the Postgres password
+
+The volume keeps the old password, so also update it **inside** Postgres:
+
+```powershell
+# 1. edit POSTGRES_PASSWORD in .env, then:
+docker compose exec airflow-postgres psql -U airflow -c "ALTER USER airflow WITH PASSWORD 'NewStrongPassword!'"
+# 2. recreate the Airflow services so they use the new connection string
+docker compose up -d
+```
+
+### If secrets were already pushed to Git
+
+Treat them as compromised: **rotate** them (above), then remove them from the history
+(`git filter-repo` or BFG), force-push, and enable GitHub secret scanning +
+push protection. Making the repo private is also recommended.
+
+---
+
+## 7. Quick troubleshooting
 
 | Problem | Likely cause | Fix |
 |---|---|---|
