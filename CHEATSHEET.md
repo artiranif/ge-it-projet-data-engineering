@@ -169,6 +169,20 @@ docker compose exec airflow-postgres psql -U airflow -c "ALTER USER airflow WITH
 docker compose up -d
 ```
 
+### Full reset (nuclear)
+
+Destroys **everything**: containers, the custom image, and ALL data volumes
+(Postgres metadata + Elasticsearch indices). Use it to start from a clean slate.
+
+```powershell
+docker compose down -v --remove-orphans --rmi local
+docker volume ls | Select-String airflow   # check leftovers, then: docker volume rm <name>
+docker compose build --no-cache
+docker compose up -d
+```
+
+After this, `airflow-init` recreates the DB schema and the admin user from `.env`.
+
 ### If secrets were already pushed to Git
 
 Treat them as compromised: **rotate** them (above), then remove them from the history
