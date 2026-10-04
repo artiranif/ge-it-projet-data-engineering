@@ -1,0 +1,11 @@
+# Keep the Docker build context small: only requirements.txt is copied
+# by the Dockerfile. Everything else is mounted at runtime or not needed.
+.git/
+.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+data/
+logs/
+memories/
+elasticsearch/

@@ -1,5 +1,10 @@
 x-airflow-common: &airflow-common
-  image: apache/airflow:3.3.2
+  # Custom image built from the local Dockerfile (installs requirements.txt once, at build time).
+  # Rebuild with `docker compose build` after any change to requirements.txt.
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: ge-it-airflow:3.3.2
   environment: &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
@@ -24,7 +29,6 @@ x-airflow-common: &airflow-common
     AIRFLOW__ELASTICSEARCH__HOST: 'http://airflow-elasticsearch:9200'
     AIRFLOW__ELASTICSEARCH__USER: 'elastic'
     AIRFLOW__ELASTICSEARCH__PASSWORD: '${ELASTIC_PASSWORD}'
-    _PIP_ADDITIONAL_REQUIREMENTS: 'apache-airflow-providers-elasticsearch,requests'
     # Rend les modules du projet importables dans les conteneurs (scripts.*, dags.*)
     PYTHONPATH: '/opt/airflow'
     # Dossier de sortie du JSON brut utilise par scripts/extract.py

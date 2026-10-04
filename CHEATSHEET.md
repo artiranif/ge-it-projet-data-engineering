@@ -82,14 +82,24 @@ Get-Content (Get-ChildItem data\raw\*.json | Select-Object -First 1).FullName -T
 A `.env` file with `ELASTIC_PASSWORD`, `KIBANA_PASSWORD` and `KIBANA_ENCRYPTION_KEY`
 is required before starting the stack.
 
-The stack uses the **official images as-is** (`apache/airflow:3.3.2`, no local `Dockerfile` / `docker build`).
-Python dependencies are installed at startup by Airflow via the
-`_PIP_ADDITIONAL_REQUIREMENTS` env var → it currently lists `apache-airflow-providers-elasticsearch` and `requests`.
+The stack runs a **custom Airflow image** (`Dockerfile`, based on `apache/airflow:3.3.2`)
+that installs `requirements.txt` **once, at build time** (`pip install -r requirements.txt`).
+This is the official recommended practice; the Compose `_PIP_ADDITIONAL_REQUIREMENTS`
+variable is not used (it is a dev-only, fragile, restart-every-time mechanism).
+
+### Build or rebuild the image
+
+Run this **after any change to `requirements.txt`**:
+
+```powershell
+docker compose build
+docker compose build --no-cache   # force a clean rebuild
+```
 
 ### Start / stop the stack
 
 ```powershell
-docker compose up -d
+docker compose up -d --build
 docker compose ps
 docker compose logs -f airflow-scheduler
 docker compose down
