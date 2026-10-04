@@ -1,0 +1,268 @@
+x-airflow-common: &airflow-common
+  image: apache/airflow:3.3.2
+  environment: &airflow-common-env
+    AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+    AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
+    # URL publique servie par le reverse proxy (NGINX) en HTTPS
+    AIRFLOW__API__BASE_URL: 'https://airflow.python-community.com'
+    # Autorise uvicorn (api-server) à faire confiance aux headers X-Forwarded-* du proxy
+    FORWARDED_ALLOW_IPS: '*'
+    # ProxyFix (Flask/FAB) : construit les URLs des pages FAB avec le bon schéma (https)
+    AIRFLOW__FAB__ENABLE_PROXY_FIX: 'True'
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-postgres/airflow
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@airflow-postgres/airflow
+    AIRFLOW__CELERY__BROKER_URL: redis://:@airflow-redis:6379/0
+    AIRFLOW__CORE__FERNET_KEY: ''
+    AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
+    AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
+    AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
+    # Connexion à Elasticsearch pour les logs (optionnel)
+    AIRFLOW__LOGGING__REMOTE_LOGGING: 'True'
+    AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID: 'elasticsearch_default'
+    AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER: 'airflow-logs'
+    AIRFLOW__ELASTICSEARCH__HOST: 'http://airflow-elasticsearch:9200'
+    AIRFLOW__ELASTICSEARCH__USER: 'elastic'
+    AIRFLOW__ELASTICSEARCH__PASSWORD: '${ELASTIC_PASSWORD}'
+    _PIP_ADDITIONAL_REQUIREMENTS: 'apache-airflow-providers-elasticsearch'
+  volumes:
+    - ./dags:/opt/airflow/dags
+    - ./logs:/opt/airflow/logs
+    - ./plugins:/opt/airflow/plugins
+    - ./config:/opt/airflow/config
+  user: "${AIRFLOW_UID:-50000}:0"
+  networks:
+    - airflow-network
+  depends_on: &airflow-common-depends-on
+    airflow-redis:
+      condition: service_healthy
+    airflow-postgres:
+      condition: service_healthy
+
+services:
+  # ==================== ELASTICSEARCH ====================
+  airflow-elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.5.4
+    container_name: airflow-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - ES_JAVA_OPTS=-Xms1g -Xmx1g
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - airflow-elasticsearch_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -s -u elastic:${ELASTIC_PASSWORD} http://localhost:9200/_cluster/health | grep -q 'green\\|yellow'"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - airflow-network
+
+  # ==================== ELASTICSEARCH SETUP (1er demarrage) ====================
+  # Definit le mot de passe du user interne kibana_system.
+  # ELASTIC_PASSWORD ne definit QUE le user 'elastic' : sans ce service,
+  # kibana_system n'a aucun mot de passe et Kibana ne peut pas s'authentifier.
+  airflow-es-setup:
+    image: curlimages/curl:8.11.0
+    container_name: airflow-es-setup
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - KIBANA_PASSWORD=${KIBANA_PASSWORD}
+    depends_on:
+      airflow-elasticsearch:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -c
+      - |
+        echo "Setting kibana_system password..."
+        until curl -s -X POST -u "elastic:$${ELASTIC_PASSWORD}" \
+          -H "Content-Type: application/json" \
+          http://airflow-elasticsearch:9200/_security/user/kibana_system/_password \
+          -d "{\"password\":\"$${KIBANA_PASSWORD}\"}" | grep -q '^{}'; do
+          echo "Waiting for Elasticsearch..."
+          sleep 5
+        done
+        echo "kibana_system password set"
+    networks:
+      - airflow-network
+
+  # ==================== KIBANA ====================
+  airflow-kibana:
+    image: docker.elastic.co/kibana/kibana:9.5.4
+    container_name: airflow-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://airflow-elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=kibana_system
+      - ELASTICSEARCH_PASSWORD=${KIBANA_PASSWORD}
+      - SERVER_HOST=0.0.0.0
+      # URL publique servie par le reverse proxy (NGINX) en HTTPS
+      - SERVER_PUBLICBASEURL=https://kibana.python-community.com
+      # Cles de chiffrement (sinon Alerting/Actions desactives + sessions invalidees au restart)
+      - XPACK_SECURITY_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+      - XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+      - XPACK_REPORTING_ENCRYPTIONKEY=${KIBANA_ENCRYPTION_KEY}
+    ports:
+      - "8017:5601"
+    depends_on:
+      airflow-elasticsearch:
+        condition: service_healthy
+      airflow-es-setup:
+        condition: service_completed_successfully
+    networks:
+      - airflow-network
+
+  # ==================== POSTGRES (pour Airflow) ====================
+  airflow-postgres:
+    image: postgres:16
+    container_name: airflow-postgres
+    environment:
+      - POSTGRES_USER=airflow
+      - POSTGRES_PASSWORD=airflow
+      - POSTGRES_DB=airflow
+    volumes:
+      - airflow-postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 5s
+    networks:
+      - airflow-network
+
+  # ==================== REDIS (pour Celery) ====================
+  airflow-redis:
+    image: redis:7
+    container_name: airflow-redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 30s
+      retries: 50
+      start_period: 30s
+    networks:
+      - airflow-network
+
+  # ==================== AIRFLOW ====================
+  airflow-init:
+    <<: *airflow-common
+    container_name: airflow-init
+    entrypoint: /bin/bash
+    command:
+      - -c
+      - |
+        airflow db migrate
+        airflow users create \
+          --username admin \
+          --firstname Admin \
+          --lastname User \
+          --role Admin \
+          --email admin@example.com \
+          --password admin
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-elasticsearch:
+        condition: service_healthy
+    restart: on-failure
+
+  airflow-apiserver:
+    <<: *airflow-common
+    container_name: airflow-apiserver
+    # --proxy-headers : respecte X-Forwarded-Proto/Host du reverse proxy (corrige le mixed content)
+    command: api-server --proxy-headers
+    ports:
+      - "8016:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-scheduler:
+    <<: *airflow-common
+    container_name: airflow-scheduler
+    command: scheduler
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    container_name: airflow-dag-processor
+    command: dag-processor
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-worker:
+    <<: *airflow-common
+    container_name: airflow-worker
+    command: celery worker
+    healthcheck:
+      test:
+        - "CMD-SHELL"
+        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-triggerer:
+    <<: *airflow-common
+    container_name: airflow-triggerer
+    command: triggerer
+    healthcheck:
+      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    depends_on:
+      <<: *airflow-common-depends-on
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-cli:
+    <<: *airflow-common
+    container_name: airflow-cli
+    profiles:
+      - debug
+    command:
+      - bash
+      - -c
+      - airflow
+
+networks:
+  airflow-network:
+    driver: bridge
+
+volumes:
+  airflow-elasticsearch_data:
+  airflow-postgres_data:
