@@ -78,5 +78,4 @@ Activate the `etl_pokemon` DAG in the Airflow UI, then trigger it.
 
 ## Author
 
-Your Name
-
+Rakotonoely Mahay Finaritra
