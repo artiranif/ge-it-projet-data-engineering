@@ -68,6 +68,9 @@ x-airflow-common: &airflow-common
     - ./dags:/opt/airflow/dags
     - ./scripts:/opt/airflow/scripts
     - ./data:/opt/airflow/data
+    # Mapping ES utilise par scripts/load.py (PROJECT_ROOT/elasticsearch/mapping.json).
+    # Sans ce montage, le conteneur ne voit pas le dossier -> FileNotFoundError.
+    - ./elasticsearch:/opt/airflow/elasticsearch
     # Named volume (not a bind mount): avoids UID/permission mismatches between
     # the host and the container user. Logs are still shipped to Elasticsearch.
     - airflow-logs:/opt/airflow/logs

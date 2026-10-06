@@ -235,9 +235,15 @@ docker compose down
 | `./dags` | `/opt/airflow/dags` |
 | `./scripts` | `/opt/airflow/scripts` |
 | `./data` | `/opt/airflow/data` |
+| `./elasticsearch` | `/opt/airflow/elasticsearch` |
 | `airflow-logs` (named volume) | `/opt/airflow/logs` |
 | `./plugins` | `/opt/airflow/plugins` |
 | `./config` | `/opt/airflow/config` |
+
+> `./elasticsearch` is mounted so `load.py` can read `mapping.json`
+> (`PROJECT_ROOT/elasticsearch/mapping.json`, i.e. `/opt/airflow/elasticsearch/mapping.json`).
+> Without it, the `load` task fails with `FileNotFoundError`. The path must match
+> **host folder name ⇒ container path** (`PROJECT_ROOT` = parent of `scripts/`).
 
 > `logs/` is a **named volume**, not a bind mount: this avoids UID/permission clashes
 > between the host and the container user. Logs are still shipped to Elasticsearch.
@@ -394,6 +400,7 @@ push protection. Making the repo private is also recommended.
 | `ModuleNotFoundError: No module named 'elasticsearch'` | the ES client is not installed in the image / venv | reinstall the dependencies (§1), then `docker compose build && docker compose up -d` (see §5) |
 | `ConnectionError` / `elastic_transport.ConnectionError` (from `load.py`) | inside a container, `ES_HOST` is unset → it falls back to `http://localhost:9200` (the container itself) | declare `ES_HOST` in `docker-compose.yaml` (`http://elastic:${ELASTIC_PASSWORD}@airflow-elasticsearch:9200`); on the host, set `$env:ES_HOST` |
 | `elasticsearch.NotFoundError` / mapping error (from `load.py`) | index created with an incompatible mapping | delete the index (`curl.exe -X DELETE -u elastic:<pw> http://localhost:9200/<ES_INDEX>`) and re-run `load.py` |
+| `FileNotFoundError: .../elasticsearch/mapping.json` (from `load.py`, inside Docker) | the `elasticsearch/` folder is not mounted into the container | declare `./elasticsearch:/opt/airflow/elasticsearch` in `docker-compose.yaml`, then `docker compose up -d` (see §5) |
 | `RuntimeError: ... documents failed during the bulk` | some documents were rejected by Elasticsearch (mapping/type mismatch) | check the up-to-3 errors logged above it, fix the mapping or the data, then re-run |
 | `RuntimeError: Extraction failed...` | fewer than 50 % of Pokémon fetched (network) | check the Internet connection and re-run |
 | `requests.exceptions.Timeout` | PokeAPI slow / network | re-run; the timeout is 15 s per request |

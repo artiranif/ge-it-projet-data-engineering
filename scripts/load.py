@@ -48,6 +48,7 @@ import json
 import logging
 import os
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from elasticsearch import Elasticsearch, helpers
 
@@ -70,6 +71,21 @@ INDEX_NAME = os.getenv("ES_INDEX", "pokemon")
 DEFAULT_ES_HOST = os.getenv("ES_HOST", "http://localhost:9200")
 
 
+def _redact(url: str) -> str:
+    """Hide the password of a URL (credentials must never appear in the logs)."""
+    try:
+        parts = urlsplit(url)
+        if parts.password is None:
+            return url
+        host = parts.hostname or ""
+        if parts.port:
+            host = f"{host}:{parts.port}"
+        netloc = f"{parts.username}:***@{host}" if parts.username else host
+        return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    except ValueError:
+        return url
+
+
 # ---------------------------------------------------------------------------
 # Connection
 # ---------------------------------------------------------------------------
@@ -81,7 +97,7 @@ def _get_es_client() -> Elasticsearch:
       2. ``ES_HOST`` environment variable (CLI / Docker fallback)
     """
     try:
-        from airflow.hooks.base import BaseHook
+        from airflow.sdk.bases.hook import BaseHook
         conn = BaseHook.get_connection("elasticsearch_default")
         host = conn.host or DEFAULT_ES_HOST
         # conn.host may not contain the scheme, depending on how it was entered
@@ -89,11 +105,16 @@ def _get_es_client() -> Elasticsearch:
             host = f"http://{host}"
         if conn.port and f":{conn.port}" not in host:
             host = f"{host}:{conn.port}"
-        logger.info(f"Elasticsearch connection via Airflow Connection: {host}")
+        # Prefer the Connection's login/password if the host has no userinfo
+        if conn.login and "@" not in host:
+            password = conn.password or ""
+            host = host.replace("://", f"://{conn.login}:{password}@", 1)
+        logger.info(f"Elasticsearch connection via Airflow Connection: {_redact(host)}")
         return Elasticsearch(host)
     except Exception as e:
         logger.warning(
-            f"Airflow Connection unavailable ({e}). Falling back to {DEFAULT_ES_HOST}"
+            f"Airflow Connection unavailable ({e}). "
+            f"Falling back to {_redact(DEFAULT_ES_HOST)}"
         )
         return Elasticsearch(DEFAULT_ES_HOST)
 
