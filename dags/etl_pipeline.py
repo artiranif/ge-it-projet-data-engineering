@@ -1,6 +1,19 @@
 """
-DAG ETL Pokémon — extract + transform.
-validate et load à venir.
+etl_pipeline.py
+---------------
+Airflow DAG for the Pokémon ETL pipeline: PokeAPI -> clean JSON -> Elasticsearch.
+
+Tasks (chained ``extract >> transform >> validate >> load``):
+    extract    fetch the 151 Gen-1 Pokémon from PokeAPI  -> data/raw/YYYY-MM-DD.json
+    transform  flatten + clean the raw JSON              -> data/processed/clean.json
+    validate   run the quality checks on the clean data  -> path unchanged
+    load       bulk-index the clean dataset into ES      -> Elasticsearch index name
+
+Each task passes its return value to the next one through XCom (``ti.xcom_pull``),
+so the steps stay loosely coupled.
+
+The load step is idempotent (deterministic Elasticsearch ``_id`` = Pokémon id),
+so re-running an interval updates the same documents instead of duplicating them.
 """
 
 from datetime import datetime, timedelta
@@ -11,6 +24,7 @@ from airflow.operators.python import PythonOperator
 from scripts.extract import extract_data
 from scripts.transform import transform_data
 from scripts.validate import validate_data
+from scripts.load import load_data
 
 default_args = {
     "owner": "data-engineering",
@@ -21,7 +35,7 @@ default_args = {
 
 with DAG(
     dag_id="etl_pokemon",
-    description="Pipeline ETL Pokémon : PokeAPI → Elasticsearch",
+    description="Pokémon ETL pipeline: PokeAPI -> Elasticsearch",
     start_date=datetime(2025, 1, 1),
     schedule="@daily",
     catchup=False,
@@ -37,7 +51,7 @@ with DAG(
     transform_task = PythonOperator(
         task_id="transform",
         python_callable=transform_data,
-        # Le chemin du fichier brut vient du XCom de extract
+        # The raw file path comes from the extract XCom
         op_kwargs={
             "input_file": "{{ ti.xcom_pull(task_ids='extract') }}"
         },
@@ -51,5 +65,13 @@ with DAG(
         },
     )
 
-    extract_task >> transform_task >> validate_task
+    load_task = PythonOperator(
+        task_id="load",
+        python_callable=load_data,
+        op_kwargs={
+            "input_file": "{{ ti.xcom_pull(task_ids='validate') }}"
+        },
+    )
+
+    extract_task >> transform_task >> validate_task >> load_task
 

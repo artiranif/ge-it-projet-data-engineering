@@ -1,0 +1,28 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0
+  },
+  "mappings": {
+    "properties": {
+      "id":                { "type": "integer" },
+      "name":              { "type": "keyword" },
+      "height_m":          { "type": "float" },
+      "weight_kg":         { "type": "float" },
+      "base_experience":   { "type": "integer" },
+      "type_primary":      { "type": "keyword" },
+      "type_secondary":    { "type": "keyword" },
+      "hp":                { "type": "integer" },
+      "attack":            { "type": "integer" },
+      "defense":           { "type": "integer" },
+      "special_attack":    { "type": "integer" },
+      "special_defense":   { "type": "integer" },
+      "speed":             { "type": "integer" },
+      "stat_total":        { "type": "integer" },
+      "power_tier":        { "type": "keyword" },
+      "ability_primary":   { "type": "keyword" },
+      "is_hidden_ability": { "type": "boolean" },
+      "sprite_url":        { "type": "keyword", "index": false }
+    }
+  }
+}

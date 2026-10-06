@@ -23,9 +23,11 @@ python -m venv .venv                                      # create the virtual e
 .venv\Scripts\python.exe scripts\extract.py      # fetch the 151 Gen-1 Pokémon -> data/raw/YYYY-MM-DD.json
 .venv\Scripts\python.exe scripts\transform.py    # flatten + clean the raw JSON -> data/processed/clean.json
 .venv\Scripts\python.exe scripts\validate.py     # run the quality checks on clean.json (fails on the first error)
+.venv\Scripts\python.exe scripts\load.py         # index clean.json into Elasticsearch (default index: pokemon)
 ```
 
-> `load.py` is not implemented yet.
+> `load.py` needs a reachable Elasticsearch (`ES_HOST`, default `http://localhost:9200`);
+> in the Docker stack it uses the Airflow Connection `elasticsearch_default` instead.
 
 ---
 
@@ -35,7 +37,10 @@ python -m venv .venv                                      # create the virtual e
 Get-ChildItem data\raw              # list the raw files
 Get-ChildItem data\processed        # list the processed files
 Get-Content data\processed\clean.json -TotalCount 20   # preview the clean dataset
+curl.exe -u elastic:<password> "http://localhost:9200/pokemon/_count?pretty"   # count the docs indexed in ES
 ```
+
+> `<password>` is the `ELASTIC_PASSWORD` value from `.env`.
 
 ---
 
@@ -45,7 +50,10 @@ Get-Content data\processed\clean.json -TotalCount 20   # preview the clean datas
 $env:PYTHONIOENCODING = "utf-8"    # force UTF-8 in the console (avoids UnicodeEncodeError)
 $env:DATA_DIR = "data\raw\test"    # override the extract output folder (default: data/raw)
 $env:RAW_DIR = "data\raw\test"     # override the transform input folder (default: data/raw)
-$env:PROCESSED_DIR = "data\processed\test"   # override the transform output / validate input folder (default: data/processed)
+$env:PROCESSED_DIR = "data\processed\test"   # override the transform output / validate & load input folder (default: data/processed)
+$env:ES_INDEX = "pokemon"          # Elasticsearch index name used by load (default: pokemon)
+$env:ES_HOST = "http://localhost:9200"   # Elasticsearch URL fallback for load in CLI (default)
+$env:MAPPING_FILE = "elasticsearch\mapping.json"   # index mapping file used by load (default)
 ```
 
 ---
@@ -70,6 +78,7 @@ docker compose down                # stop the stack (KEEPS the data volumes)
 docker compose exec airflow-scheduler python /opt/airflow/scripts/extract.py      # run extract in the container
 docker compose exec airflow-scheduler python /opt/airflow/scripts/transform.py    # run transform in the container
 docker compose exec airflow-scheduler python /opt/airflow/scripts/validate.py     # run validate in the container
+docker compose exec airflow-scheduler python /opt/airflow/scripts/load.py         # run load in the container
 docker compose exec airflow-scheduler pip show <package>                           # check an installed dependency
 ```
 

@@ -3,8 +3,7 @@
 > This is the **detailed** reference (with explanations, rationale and troubleshooting).
 > For a short, copy-paste cheat-sheet of the everyday commands, see **`CHEATSHEET.md`**.
 >
-> ⚠️ Documented so far: `extract.py`, `transform.py`, `validate.py` and the Docker/Airflow stack.
-> The load step (`scripts/load.py`) and its DAG task will be added later.
+> ⚠️ Documented so far: `extract.py`, `transform.py`, `validate.py`, `load.py` and the Docker/Airflow stack.
 > Everything can run either locally (§1-§4) or inside Docker/Airflow (§5).
 
 ---
@@ -26,15 +25,14 @@ python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-> Dependencies are listed in `requirements.txt` (currently: `requests`).
+> Dependencies are listed in `requirements.txt` (`requests`, `pandas`, `elasticsearch`).
 > No need to activate the venv: calling `.venv\Scripts\python.exe` directly is enough.
 
 ---
 
 ## 2. Run the pipeline
 
-The pipeline runs in three steps: **extract → transform → validate**. The load step
-(`load.py`) is not implemented yet.
+The pipeline runs in four steps: **extract → transform → validate → load**.
 
 ### 2.1 Extraction (`extract.py`)
 
@@ -83,6 +81,33 @@ Optional — validate a specific file:
 .venv\Scripts\python.exe -c "from scripts.validate import validate_data; print(validate_data('data/processed/clean.json'))"
 ```
 
+### 2.4 Loading (`load.py`)
+
+```powershell
+.venv\Scripts\python.exe scripts\load.py
+```
+
+- Reads `data/processed/clean.json` (override the folder with `PROCESSED_DIR`, or pass an explicit path).
+- Connects to Elasticsearch with this priority:
+  1. the Airflow Connection **`elasticsearch_default`** (used inside Airflow / the Docker stack);
+  2. the **`ES_HOST`** env var (fallback for local CLI testing, default `http://localhost:9200`).
+- Creates the index if it does not exist, using the mapping in `elasticsearch/mapping.json`
+  (override with `MAPPING_FILE`).
+- Bulk-indexes every document with a **deterministic `_id` (the Pokémon `id`)** → the load is
+  **idempotent**: re-running the DAG updates the same documents instead of creating duplicates.
+- Raises `RuntimeError` if any document fails; returns the index name (default `pokemon`, override
+  with `ES_INDEX`) so it can be chained via XCom.
+
+Optional — load a specific file:
+
+```powershell
+.venv\Scripts\python.exe -c "from scripts.load import load_data; print(load_data('data/processed/clean.json'))"
+```
+
+> The `load` step requires a reachable Elasticsearch with the `elasticsearch` Python client
+> installed (`requirements.txt`). The Airflow Connection `elasticsearch_default` is what the
+> Docker/Airflow run uses; the `ES_HOST` fallback is only for local CLI runs.
+
 ---
 
 ## 3. Options / customization
@@ -97,6 +122,10 @@ Each step reads its own environment variable (all default to the project's `data
 | `transform.py` | `RAW_DIR` | `data/raw` |
 | `transform.py` | `PROCESSED_DIR` | `data/processed` |
 | `validate.py` | `PROCESSED_DIR` | `data/processed` |
+| `load.py` | `PROCESSED_DIR` | `data/processed` |
+| `load.py` | `MAPPING_FILE` | `elasticsearch/mapping.json` |
+| `load.py` | `ES_INDEX` | `pokemon` |
+| `load.py` | `ES_HOST` | `http://localhost:9200` (CLI fallback only) |
 
 ```powershell
 $env:DATA_DIR = "data\raw\test"
@@ -106,9 +135,16 @@ $env:RAW_DIR = "data\raw\test"
 $env:PROCESSED_DIR = "data\processed\test"
 .venv\Scripts\python.exe scripts\transform.py
 .venv\Scripts\python.exe scripts\validate.py
+
+$env:ES_INDEX = "pokemon_test"
+$env:ES_HOST = "http://localhost:9200"
+.venv\Scripts\python.exe scripts\load.py
 ```
 
-### Force UTF-8 in the console (avoids the `UnicodeEncodeError` on ✅)
+### Force UTF-8 in the console (avoids the `UnicodeEncodeError`)
+
+The cp1252 Windows console cannot print every non-ASCII character (emoji, accented letters,
+Pokémon names, etc.). Set the encoding when a script logs such output:
 
 ```powershell
 $env:PYTHONIOENCODING = "utf-8"
@@ -121,14 +157,16 @@ $env:PYTHONIOENCODING = "utf-8"
 from scripts.extract import extract_data
 from scripts.transform import transform_data
 from scripts.validate import validate_data
+from scripts.load import load_data
 
 raw = extract_data()                 # -> data/raw/YYYY-MM-DD.json
 clean = transform_data(raw)          # -> data/processed/clean.json
 checked = validate_data(clean)       # -> same path, unchanged (validation only)
+index = load_data(checked)           # -> "pokemon" (indexed in Elasticsearch)
 ```
 
-Each function returns the file path, so they chain naturally through Airflow XComs
-(`op_kwargs={"input_file": "{{ ti.xcom_pull(task_ids='extract') }}"}`).
+Each function returns a value (file path, then index name), so they chain naturally through
+Airflow XComs (`op_kwargs={"input_file": "{{ ti.xcom_pull(task_ids='extract') }}"}`).
 
 ---
 
@@ -140,6 +178,10 @@ Get-Content (Get-ChildItem data\raw\*.json | Select-Object -First 1).FullName -T
 
 Get-ChildItem data\processed
 Get-Content data\processed\clean.json -TotalCount 20
+
+# Inspect what was indexed in Elasticsearch
+curl.exe -u elastic:<ELASTIC_PASSWORD> "http://localhost:9200/pokemon/_count?pretty"
+curl.exe -u elastic:<ELASTIC_PASSWORD> "http://localhost:9200/pokemon/_search?size=3&pretty"
 ```
 
 ---
@@ -219,7 +261,11 @@ of the following are required:
 ### Run a script inside the container
 
 ```powershell
-docker compose exec airflow-scheduler python /opt/airflow/scripts/extract.py
+docker compose exec airflow-scheduler python /opt/airflow/scripts/extract.py       # extract
+docker compose exec airflow-scheduler python /opt/airflow/scripts/transform.py     # transform
+docker compose exec airflow-scheduler python /opt/airflow/scripts/validate.py      # validate
+docker compose exec airflow-scheduler python /opt/airflow/scripts/load.py          # load into Elasticsearch
+docker compose exec airflow-scheduler pip show elasticsearch                      # check the ES client is installed
 ```
 
 ### Execution API (worker ↔ api-server)
@@ -336,7 +382,11 @@ push protection. Making the repo private is also recommended.
 | Task stuck in `up for retry` + audit log *“finished with state failed, but the task instance's state attribute is queued”* | worker cannot reach the Internal Execution API (URL derived from the public `API__BASE_URL` via NGINX) and/or the JWT secret is not shared | set `AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-apiserver:8080/execution/` and a shared `AIRFLOW__API_AUTH__JWT_SECRET` (see §5) |
 | `docker` not recognized in PowerShell | Docker Desktop not running / not on `PATH` | start Docker Desktop, then `docker compose ps` |
 | Log view shows *“Please make sure that all your Airflow components … have the same 'secret_key' configured in '[api]' section”* | `AIRFLOW__API__SECRET_KEY` unset (each container generated its own) → worker returns `403` for live logs | set a shared `AIRFLOW__API__SECRET_KEY` in `.env` (see §5), then `docker compose up -d` |
-| `UnicodeEncodeError: 'charmap' codec...` | cp1252 console on an emoji in the output (e.g. the `✅` in `extract.py`) | `$env:PYTHONIOENCODING = "utf-8"` (§3) |
+| `UnicodeEncodeError: 'charmap' codec...` | cp1252 console on non-ASCII output (emoji, accented letters, Pokémon names) | `$env:PYTHONIOENCODING = "utf-8"` (§3) |
 | `ValueError: Quality check failed: ...` (from `validate.py`) | one of the quality checks failed on `data/processed/clean.json` | inspect the printed message, re-run `transform.py`, then `validate.py` again |
+| `ModuleNotFoundError: No module named 'elasticsearch'` | the ES client is not installed in the image / venv | reinstall the dependencies (§1), then `docker compose build && docker compose up -d` (see §5) |
+| `ConnectionError` / `elastic_transport.ConnectionError` (from `load.py`) | Elasticsearch is unreachable (wrong `ES_HOST` or the stack is down) | check `docker compose ps`, confirm `ES_HOST` / the `elasticsearch_default` Connection, then re-run |
+| `elasticsearch.NotFoundError` / mapping error (from `load.py`) | index created with an incompatible mapping | delete the index (`curl.exe -X DELETE -u elastic:<pw> http://localhost:9200/<ES_INDEX>`) and re-run `load.py` |
+| `RuntimeError: ... documents failed during the bulk` | some documents were rejected by Elasticsearch (mapping/type mismatch) | check the up-to-3 errors logged above it, fix the mapping or the data, then re-run |
 | `RuntimeError: Extraction failed...` | fewer than 50 % of Pokémon fetched (network) | check the Internet connection and re-run |
 | `requests.exceptions.Timeout` | PokeAPI slow / network | re-run; the timeout is 15 s per request |
