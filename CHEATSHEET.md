@@ -176,6 +176,18 @@ api-server (`/execution/`). Two settings are required in a multi-container stack
 > Then set `AIRFLOW_JWT_SECRET=<the generated value>` in `.env`. For hardened deployments,
 > Airflow recommends asymmetric keys (`api_auth.jwt_private_key_path` + `trusted_jwks_url`).
 
+There is also a **second** shared secret, `AIRFLOW__API__SECRET_KEY` (`[api] secret_key`).
+It signs the requests the UI makes back to the worker to read **live** task logs. It must be
+identical on every component too — otherwise the worker answers `403` and the log view shows:
+
+```
+!!!! Please make sure that all your Airflow components ... have the same
+'secret_key' configured in '[api]' section ...
+*** Log ... not found in Elasticsearch ...
+```
+
+Set it from `.env` as well: `AIRFLOW_API_SECRET_KEY=<a shared random value>`.
+
 > Symptom when one of these is missing: the task stays in `queued` / `up for retry` and the
 > audit log shows *“Executor CeleryExecutor reported that the task instance … finished with
 > state failed, but the task instance's state attribute is queued”*.
@@ -256,6 +268,7 @@ push protection. Making the repo private is also recommended.
 | `ModuleNotFoundError: No module named 'requests'` | dependency not installed / wrong interpreter | re-run the install command (§1) with `.venv\Scripts\python.exe` |
 | Task stuck in `up for retry` + audit log *“finished with state failed, but the task instance's state attribute is queued”* | worker cannot reach the Internal Execution API (URL derived from the public `API__BASE_URL` via NGINX) and/or the JWT secret is not shared | set `AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-apiserver:8080/execution/` and a shared `AIRFLOW__API_AUTH__JWT_SECRET` (see §5) |
 | `docker` not recognized in PowerShell | Docker Desktop not running / not on `PATH` | start Docker Desktop, then `docker compose ps` |
+| Log view shows *“Please make sure that all your Airflow components … have the same 'secret_key' configured in '[api]' section”* | `AIRFLOW__API__SECRET_KEY` unset (each container generated its own) → worker returns `403` for live logs | set a shared `AIRFLOW__API__SECRET_KEY` in `.env` (see §5), then `docker compose up -d` |
 | `UnicodeEncodeError: 'charmap' codec...` | cp1252 console on the `✅` | `$env:PYTHONIOENCODING = "utf-8"` (§3) |
 | `RuntimeError: Extraction failed...` | fewer than 50 % of Pokémon fetched (network) | check the Internet connection and re-run |
 | `requests.exceptions.Timeout` | PokeAPI slow / network | re-run; the timeout is 15 s per request |

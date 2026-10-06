@@ -20,6 +20,12 @@ x-airflow-common: &airflow-common
     # les tokens des taches sont rejetes -> taches bloquees en "queued".
     AIRFLOW__API_AUTH__JWT_SECRET: '${AIRFLOW_JWT_SECRET}'
     AIRFLOW__API_AUTH__JWT_ISSUER: 'airflow'
+    # Secret partage par TOUS les composants ([api] secret_key).
+    # Il signe les requetes que l'UI fait au worker pour lire les logs en direct :
+    # s'il differe, le worker repond 403 et l'UI affiche
+    # "!!! Please make sure that all your Airflow components ... have the same
+    #  'secret_key' configured in '[api]' section".
+    AIRFLOW__API__SECRET_KEY: '${AIRFLOW_API_SECRET_KEY}'
     # Autorise uvicorn (api-server) à faire confiance aux headers X-Forwarded-* du proxy
     FORWARDED_ALLOW_IPS: '*'
     # ProxyFix (Flask/FAB) : construit les URLs des pages FAB avec le bon schéma (https)
