@@ -57,6 +57,13 @@ x-airflow-common: &airflow-common
     PYTHONPATH: '/opt/airflow'
     # Dossier de sortie du JSON brut utilise par scripts/extract.py
     DATA_DIR: '/opt/airflow/data/raw'
+    # Endpoint Elasticsearch utilise par scripts/load.py (etape load du DAG).
+    # IMPORTANT : ce n'est PAS une variable [elasticsearch] de logging (celles-ci ne
+    # servent qu'aux logs de taches). Attention aussi : les variables de .env ne sont
+    # PAS injectees dans les conteneurs (Compose ne s'en sert que pour la substitution
+    # ${...} du YAML) -> ES_HOST doit etre declare ICI pour etre visible dans le DAG.
+    # Identifiants dans l'URL (le client ES n'a pas d'options user/password separees).
+    ES_HOST: 'http://elastic:${ELASTIC_PASSWORD}@airflow-elasticsearch:9200'
   volumes:
     - ./dags:/opt/airflow/dags
     - ./scripts:/opt/airflow/scripts

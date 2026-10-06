@@ -26,8 +26,9 @@ python -m venv .venv                                      # create the virtual e
 .venv\Scripts\python.exe scripts\load.py         # index clean.json into Elasticsearch (default index: pokemon)
 ```
 
-> `load.py` needs a reachable Elasticsearch (`ES_HOST`, default `http://localhost:9200`);
-> in the Docker stack it uses the Airflow Connection `elasticsearch_default` instead.
+> `load.py` needs a reachable Elasticsearch. On the host: `ES_HOST` (default `http://localhost:9200`).
+> Inside Docker, `ES_HOST` is set in `docker-compose.yaml` (`http://elastic:<pw>@airflow-elasticsearch:9200`)
+> — the vars of `.env` are **not** injected into the containers.
 
 ---
 
@@ -52,7 +53,7 @@ $env:DATA_DIR = "data\raw\test"    # override the extract output folder (default
 $env:RAW_DIR = "data\raw\test"     # override the transform input folder (default: data/raw)
 $env:PROCESSED_DIR = "data\processed\test"   # override the transform output / validate & load input folder (default: data/processed)
 $env:ES_INDEX = "pokemon"          # Elasticsearch index name used by load (default: pokemon)
-$env:ES_HOST = "http://localhost:9200"   # Elasticsearch URL fallback for load in CLI (default)
+$env:ES_HOST = "http://localhost:9200"   # Elasticsearch URL used by load on the HOST (inside Docker it comes from docker-compose)
 $env:MAPPING_FILE = "elasticsearch\mapping.json"   # index mapping file used by load (default)
 ```
 

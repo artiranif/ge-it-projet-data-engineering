@@ -89,8 +89,11 @@ Optional — validate a specific file:
 
 - Reads `data/processed/clean.json` (override the folder with `PROCESSED_DIR`, or pass an explicit path).
 - Connects to Elasticsearch with this priority:
-  1. the Airflow Connection **`elasticsearch_default`** (used inside Airflow / the Docker stack);
-  2. the **`ES_HOST`** env var (fallback for local CLI testing, default `http://localhost:9200`).
+  1. the Airflow Connection **`elasticsearch_default`** — **only if you created it**
+     (`airflow connections add`). This project's stack does **not** create it (ES remote
+     logging uses the `[elasticsearch]` section, not a Connection);
+  2. the **`ES_HOST`** env var (the effective path here — see below);
+  3. the built-in default `http://localhost:9200` (CLI only).
 - Creates the index if it does not exist, using the mapping in `elasticsearch/mapping.json`
   (override with `MAPPING_FILE`).
 - Bulk-indexes every document with a **deterministic `_id` (the Pokémon `id`)** → the load is
@@ -104,9 +107,13 @@ Optional — load a specific file:
 .venv\Scripts\python.exe -c "from scripts.load import load_data; print(load_data('data/processed/clean.json'))"
 ```
 
-> The `load` step requires a reachable Elasticsearch with the `elasticsearch` Python client
-> installed (`requirements.txt`). The Airflow Connection `elasticsearch_default` is what the
-> Docker/Airflow run uses; the `ES_HOST` fallback is only for local CLI runs.
+> **Where does `ES_HOST` come from?** `load.py` reads `ES_HOST` at import time. On the host you
+> set it (`$env:ES_HOST = "http://localhost:9200"`). **Inside the containers it must be declared
+> as an environment variable in `docker-compose.yaml`** (`ES_HOST: 'http://elastic:${ELASTIC_PASSWORD}@airflow-elasticsearch:9200'`)
+> — the variables of `.env` are **never injected** into the containers (Compose only uses `.env`
+> for `${...}` substitution of the YAML). Without it, the Airflow run falls back to
+> `http://localhost:9200` → `localhost` inside the container is the container itself →
+> `ConnectionError`. Same principle as `DATA_DIR`.
 
 ---
 
@@ -125,7 +132,7 @@ Each step reads its own environment variable (all default to the project's `data
 | `load.py` | `PROCESSED_DIR` | `data/processed` |
 | `load.py` | `MAPPING_FILE` | `elasticsearch/mapping.json` |
 | `load.py` | `ES_INDEX` | `pokemon` |
-| `load.py` | `ES_HOST` | `http://localhost:9200` (CLI fallback only) |
+| `load.py` | `ES_HOST` | `http://elastic:****@airflow-elasticsearch:9200` (set in `docker-compose.yaml`, not read from `.env`) |
 
 ```powershell
 $env:DATA_DIR = "data\raw\test"
@@ -385,7 +392,7 @@ push protection. Making the repo private is also recommended.
 | `UnicodeEncodeError: 'charmap' codec...` | cp1252 console on non-ASCII output (emoji, accented letters, Pokémon names) | `$env:PYTHONIOENCODING = "utf-8"` (§3) |
 | `ValueError: Quality check failed: ...` (from `validate.py`) | one of the quality checks failed on `data/processed/clean.json` | inspect the printed message, re-run `transform.py`, then `validate.py` again |
 | `ModuleNotFoundError: No module named 'elasticsearch'` | the ES client is not installed in the image / venv | reinstall the dependencies (§1), then `docker compose build && docker compose up -d` (see §5) |
-| `ConnectionError` / `elastic_transport.ConnectionError` (from `load.py`) | Elasticsearch is unreachable (wrong `ES_HOST` or the stack is down) | check `docker compose ps`, confirm `ES_HOST` / the `elasticsearch_default` Connection, then re-run |
+| `ConnectionError` / `elastic_transport.ConnectionError` (from `load.py`) | inside a container, `ES_HOST` is unset → it falls back to `http://localhost:9200` (the container itself) | declare `ES_HOST` in `docker-compose.yaml` (`http://elastic:${ELASTIC_PASSWORD}@airflow-elasticsearch:9200`); on the host, set `$env:ES_HOST` |
 | `elasticsearch.NotFoundError` / mapping error (from `load.py`) | index created with an incompatible mapping | delete the index (`curl.exe -X DELETE -u elastic:<pw> http://localhost:9200/<ES_INDEX>`) and re-run `load.py` |
 | `RuntimeError: ... documents failed during the bulk` | some documents were rejected by Elasticsearch (mapping/type mismatch) | check the up-to-3 errors logged above it, fix the mapping or the data, then re-run |
 | `RuntimeError: Extraction failed...` | fewer than 50 % of Pokémon fetched (network) | check the Internet connection and re-run |
