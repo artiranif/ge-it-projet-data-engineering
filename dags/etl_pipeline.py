@@ -10,6 +10,7 @@ from airflow.operators.python import PythonOperator
 
 from scripts.extract import extract_data
 from scripts.transform import transform_data
+from scripts.validate import validate_data
 
 default_args = {
     "owner": "data-engineering",
@@ -42,5 +43,13 @@ with DAG(
         },
     )
 
-    extract_task >> transform_task
+    validate_task = PythonOperator(
+        task_id="validate",
+        python_callable=validate_data,
+        op_kwargs={
+            "input_file": "{{ ti.xcom_pull(task_ids='transform') }}"
+        },
+    )
+
+    extract_task >> transform_task >> validate_task
 

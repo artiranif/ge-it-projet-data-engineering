@@ -3,8 +3,8 @@
 > This is the **detailed** reference (with explanations, rationale and troubleshooting).
 > For a short, copy-paste cheat-sheet of the everyday commands, see **`CHEATSHEET.md`**.
 >
-> ⚠️ For now, only the extraction step (`scripts/extract.py`) is documented here.
-> The other steps (transform, load, validate, Airflow DAG) will be added later.
+> ⚠️ Documented so far: `extract.py`, `transform.py`, `validate.py` and the Docker/Airflow stack.
+> The load step (`scripts/load.py`) and its DAG task will be added later.
 > Everything can run either locally (§1-§4) or inside Docker/Airflow (§5).
 
 ---
@@ -31,7 +31,12 @@ python -m venv .venv
 
 ---
 
-## 2. Run the extraction
+## 2. Run the pipeline
+
+The pipeline runs in three steps: **extract → transform → validate**. The load step
+(`load.py`) is not implemented yet.
+
+### 2.1 Extraction (`extract.py`)
 
 ```powershell
 .venv\Scripts\python.exe scripts\extract.py
@@ -39,19 +44,68 @@ python -m venv .venv
 
 - Fetches the first **151 Pokémon** (Gen 1) from `https://pokeapi.co/api/v2`.
 - Writes the raw JSON to `data/raw/YYYY-MM-DD.json` (today's date in UTC, folder created automatically).
-- Prints at the end: `✅ Extraction done: <file path>`.
+- Returns (and prints) the written file path, usable as an Airflow XCom.
+
+### 2.2 Transformation (`transform.py`)
+
+```powershell
+.venv\Scripts\python.exe scripts\transform.py
+```
+
+- Reads today's raw file `data/raw/YYYY-MM-DD.json` (override the input folder with `RAW_DIR`, or pass an explicit path).
+- Flattens the nested JSON, drops duplicates on `id`, casts types, computes `stat_total` / `power_tier`, sorts by `id`.
+- Writes the clean dataset to `data/processed/clean.json` and prints its path.
+
+Optional — transform a specific raw file:
+
+```powershell
+.venv\Scripts\python.exe -c "from scripts.transform import transform_data; print(transform_data('data/raw/2026-10-06.json'))"
+```
+
+### 2.3 Validation (`validate.py`)
+
+```powershell
+.venv\Scripts\python.exe scripts\validate.py
+```
+
+- Reads `data/processed/clean.json` (override the folder with `PROCESSED_DIR`, or pass an explicit path).
+- Runs quality checks: file exists, dataset non-empty, **≥ 100 rows**, non-null and unique `id`,
+  required fields present (`name`, `type_primary`, `stat_total`, `power_tier`), all six stats in
+  `[1, 255]`, `stat_total` equals the sum of the stats, and every `power_tier` is one of
+  `low` / `mid` / `high` / `elite`.
+- Prints `Validation OK: <path>` on success. On the first failed check it raises a `ValueError`
+  and exits with a non-zero code — in Airflow this marks the task **failed** and triggers a retry.
+- Returns the path **unchanged**, so it can be chained via XCom to the load step.
+
+Optional — validate a specific file:
+
+```powershell
+.venv\Scripts\python.exe -c "from scripts.validate import validate_data; print(validate_data('data/processed/clean.json'))"
+```
 
 ---
 
 ## 3. Options / customization
 
-### Change the output folder
+### Change the input / output folders
 
-`extract.py` reads the `DATA_DIR` environment variable (default: `data/raw`).
+Each step reads its own environment variable (all default to the project's `data/` folders):
+
+| Step | Variable | Default |
+|---|---|---|
+| `extract.py` | `DATA_DIR` | `data/raw` |
+| `transform.py` | `RAW_DIR` | `data/raw` |
+| `transform.py` | `PROCESSED_DIR` | `data/processed` |
+| `validate.py` | `PROCESSED_DIR` | `data/processed` |
 
 ```powershell
 $env:DATA_DIR = "data\raw\test"
 .venv\Scripts\python.exe scripts\extract.py
+
+$env:RAW_DIR = "data\raw\test"
+$env:PROCESSED_DIR = "data\processed\test"
+.venv\Scripts\python.exe scripts\transform.py
+.venv\Scripts\python.exe scripts\validate.py
 ```
 
 ### Force UTF-8 in the console (avoids the `UnicodeEncodeError` on ✅)
@@ -61,13 +115,20 @@ $env:PYTHONIOENCODING = "utf-8"
 .venv\Scripts\python.exe scripts\extract.py
 ```
 
-### Call it as a function (from any Python code)
+### Call them as functions (from any Python code or a DAG)
 
 ```python
 from scripts.extract import extract_data
-path = extract_data()   # returns the written file path (usable as an Airflow XCom)
-print(path)
+from scripts.transform import transform_data
+from scripts.validate import validate_data
+
+raw = extract_data()                 # -> data/raw/YYYY-MM-DD.json
+clean = transform_data(raw)          # -> data/processed/clean.json
+checked = validate_data(clean)       # -> same path, unchanged (validation only)
 ```
+
+Each function returns the file path, so they chain naturally through Airflow XComs
+(`op_kwargs={"input_file": "{{ ti.xcom_pull(task_ids='extract') }}"}`).
 
 ---
 
@@ -76,6 +137,9 @@ print(path)
 ```powershell
 Get-ChildItem data\raw
 Get-Content (Get-ChildItem data\raw\*.json | Select-Object -First 1).FullName -TotalCount 20
+
+Get-ChildItem data\processed
+Get-Content data\processed\clean.json -TotalCount 20
 ```
 
 ---
@@ -272,6 +336,7 @@ push protection. Making the repo private is also recommended.
 | Task stuck in `up for retry` + audit log *“finished with state failed, but the task instance's state attribute is queued”* | worker cannot reach the Internal Execution API (URL derived from the public `API__BASE_URL` via NGINX) and/or the JWT secret is not shared | set `AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-apiserver:8080/execution/` and a shared `AIRFLOW__API_AUTH__JWT_SECRET` (see §5) |
 | `docker` not recognized in PowerShell | Docker Desktop not running / not on `PATH` | start Docker Desktop, then `docker compose ps` |
 | Log view shows *“Please make sure that all your Airflow components … have the same 'secret_key' configured in '[api]' section”* | `AIRFLOW__API__SECRET_KEY` unset (each container generated its own) → worker returns `403` for live logs | set a shared `AIRFLOW__API__SECRET_KEY` in `.env` (see §5), then `docker compose up -d` |
-| `UnicodeEncodeError: 'charmap' codec...` | cp1252 console on the `✅` | `$env:PYTHONIOENCODING = "utf-8"` (§3) |
+| `UnicodeEncodeError: 'charmap' codec...` | cp1252 console on an emoji in the output (e.g. the `✅` in `extract.py`) | `$env:PYTHONIOENCODING = "utf-8"` (§3) |
+| `ValueError: Quality check failed: ...` (from `validate.py`) | one of the quality checks failed on `data/processed/clean.json` | inspect the printed message, re-run `transform.py`, then `validate.py` again |
 | `RuntimeError: Extraction failed...` | fewer than 50 % of Pokémon fetched (network) | check the Internet connection and re-run |
 | `requests.exceptions.Timeout` | PokeAPI slow / network | re-run; the timeout is 15 s per request |
