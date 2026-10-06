@@ -1,0 +1,43 @@
+{
+  "top_10_pokemon_par_puissance": {
+    "description": "Top 10 Pokémon par stat_total",
+    "body": {
+      "size": 0,
+      "aggs": {
+        "top": {
+          "terms": {
+            "field": "name",
+            "size": 10,
+            "order": { "max_total": "desc" }
+          },
+          "aggs": {
+            "max_total": { "max": { "field": "stat_total" } }
+          }
+        }
+      }
+    }
+  },
+  "repartition_par_tier": {
+    "description": "Nombre de Pokémon par power_tier",
+    "body": {
+      "size": 0,
+      "aggs": {
+        "par_tier": { "terms": { "field": "power_tier" } }
+      }
+    }
+  },
+  "puissance_moyenne_par_type": {
+    "description": "Moyenne de stat_total par type primaire",
+    "body": {
+      "size": 0,
+      "aggs": {
+        "par_type": {
+          "terms": { "field": "type_primary", "size": 15 },
+          "aggs": {
+            "avg_total": { "avg": { "field": "stat_total" } }
+          }
+        }
+      }
+    }
+  }
+}
