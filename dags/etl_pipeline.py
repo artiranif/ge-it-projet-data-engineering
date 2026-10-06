@@ -11,7 +11,7 @@ from airflow.operators.python import PythonOperator
 from scripts.extract import extract_data
 
 default_args = {
-    "owner": "ton_nom",
+    "owner": "data-engineering",
     "retries": 2,
     "retry_delay": timedelta(minutes=2),
     "email_on_failure": False,

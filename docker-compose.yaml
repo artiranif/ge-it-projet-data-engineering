@@ -10,6 +10,16 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__AUTH_MANAGER: airflow.providers.fab.auth_manager.fab_auth_manager.FabAuthManager
     # URL publique servie par le reverse proxy (NGINX) en HTTPS
     AIRFLOW__API__BASE_URL: 'https://airflow.python-community.com'
+    # URL INTERNE de l'Execution API (appel worker -> api-server).
+    # Sans elle, elle est derivee de API__BASE_URL (URL publique via NGINX) :
+    # le conteneur doit sortir puis revenir par le proxy pour reporter l'etat
+    # des taches Celery -> "state changed externally".
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: 'http://airflow-apiserver:8080/execution/'
+    # Secret JWT partage par TOUS les composants (api-server, scheduler, worker).
+    # S'il est absent, chaque conteneur genere son propre jwt_secret.generated :
+    # les tokens des taches sont rejetes -> taches bloquees en "queued".
+    AIRFLOW__API_AUTH__JWT_SECRET: '${AIRFLOW_JWT_SECRET}'
+    AIRFLOW__API_AUTH__JWT_ISSUER: 'airflow'
     # Autorise uvicorn (api-server) à faire confiance aux headers X-Forwarded-* du proxy
     FORWARDED_ALLOW_IPS: '*'
     # ProxyFix (Flask/FAB) : construit les URLs des pages FAB avec le bon schéma (https)
@@ -22,13 +32,21 @@ x-airflow-common: &airflow-common
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
-    # Connexion à Elasticsearch pour les logs (optionnel)
+    # Logs de taches vers Elasticsearch.
+    # IMPORTANT: le TaskHandler ES n'a PAS d'options [elasticsearch] user/password :
+    # les identifiants doivent etre dans l'URL du host (user:pass@host).
+    # Sans write_to_es + json_format, rien n'est ecrit dans ES et l'UI ne peut
+    # rien afficher (les logs ne restent que dans le volume local).
+    # Le scheme 'elasticsearch://' active le dispatch provider (Airflow >= 3.3) :
+    # le handler est construit depuis la section [elasticsearch] ci-dessous,
+    # aucune Airflow Connection n'est necessaire (donc pas de REMOTE_LOG_CONN_ID).
     AIRFLOW__LOGGING__REMOTE_LOGGING: 'True'
-    AIRFLOW__LOGGING__REMOTE_LOG_CONN_ID: 'elasticsearch_default'
-    AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER: 'airflow-logs'
-    AIRFLOW__ELASTICSEARCH__HOST: 'http://airflow-elasticsearch:9200'
-    AIRFLOW__ELASTICSEARCH__USER: 'elastic'
-    AIRFLOW__ELASTICSEARCH__PASSWORD: '${ELASTIC_PASSWORD}'
+    AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER: 'elasticsearch://'
+    AIRFLOW__ELASTICSEARCH__HOST: 'http://elastic:${ELASTIC_PASSWORD}@airflow-elasticsearch:9200'
+    AIRFLOW__ELASTICSEARCH__WRITE_TO_ES: 'True'
+    AIRFLOW__ELASTICSEARCH__JSON_FORMAT: 'True'
+    AIRFLOW__ELASTICSEARCH__WRITE_STDOUT: 'False'
+    AIRFLOW__ELASTICSEARCH__TARGET_INDEX: 'airflow-logs'
     # Rend les modules du projet importables dans les conteneurs (scripts.*, dags.*)
     PYTHONPATH: '/opt/airflow'
     # Dossier de sortie du JSON brut utilise par scripts/extract.py

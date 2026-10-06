@@ -128,11 +128,64 @@ docker compose down
 
 > `PYTHONPATH=/opt/airflow` and `DATA_DIR=/opt/airflow/data/raw`, so `from scripts.extract import extract_data` works in the DAGs.
 
+### Task logs in Elasticsearch
+
+For the Airflow UI to display task logs when remote logging to Elasticsearch is on, **all**
+of the following are required:
+
+| Setting | Value | Why |
+|---|---|---|
+| `AIRFLOW__LOGGING__REMOTE_BASE_LOG_FOLDER` | `elasticsearch://` | Routes the remote log backend to the ES provider (Airflow ≥ 3.3). Do **not** put an index name here. |
+| `AIRFLOW__ELASTICSEARCH__HOST` | `http://elastic:${ELASTIC_PASSWORD}@airflow-elasticsearch:9200` | Credentials **must be in the URL** — there is no `[elasticsearch] user`/`password` option. |
+| `AIRFLOW__ELASTICSEARCH__WRITE_TO_ES` | `True` | Without it, logs are never written to ES and the UI shows an empty log stream. |
+| `AIRFLOW__ELASTICSEARCH__JSON_FORMAT` | `True` | Required for `write_to_es` to work. |
+| `AIRFLOW__ELASTICSEARCH__WRITE_STDOUT` | `False` | Use ES instead of stdout. |
+| `AIRFLOW__ELASTICSEARCH__TARGET_INDEX` | `airflow-logs` | Index that receives the log documents. |
+
+> **Why the logs were empty:** with only `REMOTE_LOGGING=True` + a host, the ES handler is
+> registered as the log **reader** but nothing writes to ES (`write_to_es` was unset). The
+> reader then reports *“Log … not found in Elasticsearch”* and the UI shows no lines.
+>
+> Note: in Airflow 3, worker logs reach Elasticsearch only **after the task finishes**
+> (they may be buffered until then). Reload the log page once the task is `success`/`failed`.
+
 ### Run a script inside the container
 
 ```powershell
 docker compose exec airflow-scheduler python /opt/airflow/scripts/extract.py
 ```
+
+### Execution API (worker ↔ api-server)
+
+In Airflow 3 the Celery worker runs the task through the **Internal Execution API** on the
+api-server (`/execution/`). Two settings are required in a multi-container stack:
+
+| Setting | Value | Why |
+|---|---|---|
+| `AIRFLOW__CORE__EXECUTION_API_SERVER_URL` | `http://airflow-apiserver:8080/execution/` | If unset it is **derived from `AIRFLOW__API__BASE_URL`** (`https://airflow.python-community.com`). The worker would then try to reach the api-server through the public NGINX URL, which can fail/time out → the task never reports back. |
+| `AIRFLOW__API_AUTH__JWT_SECRET` | a single shared secret | If unset, **each container generates its own** `jwt_secret.generated`; task tokens are rejected by the api-server. |
+
+> Generate the shared secret with `secrets.token_urlsafe(32)` (256-bit, cryptographically
+> secure — the Python-doc recommended way). It belongs in `.env` (git-ignored), never
+> hardcoded in `docker-compose.yaml`:
+>
+> ```powershell
+> .venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(32))"
+> ```
+>
+> Then set `AIRFLOW_JWT_SECRET=<the generated value>` in `.env`. For hardened deployments,
+> Airflow recommends asymmetric keys (`api_auth.jwt_private_key_path` + `trusted_jwks_url`).
+
+> Symptom when one of these is missing: the task stays in `queued` / `up for retry` and the
+> audit log shows *“Executor CeleryExecutor reported that the task instance … finished with
+> state failed, but the task instance's state attribute is queued”*.
+
+### Task logs: how Airflow chooses what to show
+
+For a failed task, the UI reads logs by `try_number`. If the run has **no `try_number == 1` attempt**
+(e.g. the task was queued/retried without ever running) the UI prints *“No logs available for
+this task.”* — this is **not** a problem with `scripts/extract.py`. Once the execution-API issue
+above is fixed and a real attempt runs, the logs appear (shipped to Elasticsearch).
 
 ---
 
@@ -197,7 +250,12 @@ push protection. Making the repo private is also recommended.
 |---|---|---|
 | `ModuleNotFoundError: No module named 'airflow'` | `AIRFLOW_UID` changed away from 50000 while a service bypasses the Airflow entrypoint (`entrypoint: /bin/bash`) → user/HOME not created | set `AIRFLOW_UID=50000` in `.env`, then `docker compose down && docker compose up -d` (see §5) |
 | `Permission denied: '/opt/airflow/logs/...'` | `./logs` bind-mounted and not writable by the container user | use the named volume `airflow-logs` (already configured) or `chown` the folder |
+| Task logs empty in the UI (*“Log … not found in Elasticsearch”*) | ES handler active but nothing written to ES (`WRITE_TO_ES`/`JSON_FORMAT` unset) | set `AIRFLOW__ELASTICSEARCH__WRITE_TO_ES=True` + `JSON_FORMAT=True` and `REMOTE_BASE_LOG_FOLDER=elasticsearch://` (see §5) |
+| ES `401 Unauthorized` / no logs indexed | credentials missing from the host URL | put `user:pass@` in `AIRFLOW__ELASTICSEARCH__HOST` (no `[elasticsearch]` user/password option exists) |
+| Logs appear only after the task finishes | Airflow 3 flushes worker logs to ES at task end | expected behaviour — reload once the task is done |
 | `ModuleNotFoundError: No module named 'requests'` | dependency not installed / wrong interpreter | re-run the install command (§1) with `.venv\Scripts\python.exe` |
+| Task stuck in `up for retry` + audit log *“finished with state failed, but the task instance's state attribute is queued”* | worker cannot reach the Internal Execution API (URL derived from the public `API__BASE_URL` via NGINX) and/or the JWT secret is not shared | set `AIRFLOW__CORE__EXECUTION_API_SERVER_URL=http://airflow-apiserver:8080/execution/` and a shared `AIRFLOW__API_AUTH__JWT_SECRET` (see §5) |
+| `docker` not recognized in PowerShell | Docker Desktop not running / not on `PATH` | start Docker Desktop, then `docker compose ps` |
 | `UnicodeEncodeError: 'charmap' codec...` | cp1252 console on the `✅` | `$env:PYTHONIOENCODING = "utf-8"` (§3) |
 | `RuntimeError: Extraction failed...` | fewer than 50 % of Pokémon fetched (network) | check the Internet connection and re-run |
 | `requests.exceptions.Timeout` | PokeAPI slow / network | re-run; the timeout is 15 s per request |
