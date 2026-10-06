@@ -1,6 +1,6 @@
 """
-DAG ETL Pokémon — étape 1 : extraction uniquement.
-On ajoutera transform / validate / load progressivement.
+DAG ETL Pokémon — extract + transform.
+validate et load à venir.
 """
 
 from datetime import datetime, timedelta
@@ -9,6 +9,7 @@ from airflow import DAG
 from airflow.operators.python import PythonOperator
 
 from scripts.extract import extract_data
+from scripts.transform import transform_data
 
 default_args = {
     "owner": "data-engineering",
@@ -19,7 +20,7 @@ default_args = {
 
 with DAG(
     dag_id="etl_pokemon",
-    description="Extraction PokeAPI → JSON brut",
+    description="Pipeline ETL Pokémon : PokeAPI → Elasticsearch",
     start_date=datetime(2025, 1, 1),
     schedule="@daily",
     catchup=False,
@@ -31,3 +32,15 @@ with DAG(
         task_id="extract",
         python_callable=extract_data,
     )
+
+    transform_task = PythonOperator(
+        task_id="transform",
+        python_callable=transform_data,
+        # Le chemin du fichier brut vient du XCom de extract
+        op_kwargs={
+            "input_file": "{{ ti.xcom_pull(task_ids='extract') }}"
+        },
+    )
+
+    extract_task >> transform_task
+
